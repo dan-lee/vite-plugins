@@ -242,7 +242,6 @@ export function vitePluginReactServer(
     build: {
       ssr: true,
       manifest: true,
-      emitAssets: true,
       ssrEmitAssets: true,
       outDir: "dist/rsc",
       rollupOptions: {
