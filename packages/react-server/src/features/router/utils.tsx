@@ -1,65 +1,54 @@
-import type { ActionResult } from "../server-action/react-server";
+import type { ActionResult } from "../server-action/server";
+import type { MatchSegment } from "./tree";
 
-export type LayoutRequest = Record<
-  string,
-  {
-    type: "page" | "layout";
-    name: string;
-  }
->;
-
-export type ServerRouterData = {
+export type FlightData = {
   action?: Pick<ActionResult, "error" | "data">;
-  layout: Record<string, React.ReactNode>;
+  metadata?: React.ReactNode;
+  nodeMap: Record<string, React.ReactNode>;
+  layoutContentMap: Record<string, string>;
+  segments: MatchSegment[];
+  url: string;
 };
 
 export const LAYOUT_ROOT_NAME = "__root";
 
-export function createLayoutContentRequest(pathname: string) {
-  const prefixes = getPathPrefixes(pathname);
-  const map: LayoutRequest = {
-    [LAYOUT_ROOT_NAME]: { type: "layout", name: "/" },
-  };
-  for (let i = 0; i < prefixes.length; i++) {
-    const prefix = prefixes[i]!;
-    if (i < prefixes.length - 1) {
-      map[prefix] = {
-        type: "layout",
-        name: prefixes[i + 1]!,
-      };
-    } else {
-      map[prefix] = {
-        type: "page",
-        name: prefix,
-      };
-    }
+// enforce no trailing slash for simplicity
+export function handleTrailingSlash(url: URL) {
+  const normalized = url.pathname.replaceAll(/\/*$/g, "") || "/";
+  if (normalized !== url.pathname) {
+    return new Response(null, {
+      status: 308,
+      headers: {
+        "x-handle-trailing-slash": "1",
+        location: normalized + url.search,
+      },
+    });
   }
-  return map;
-}
-
-export function getNewLayoutContentKeys(prev: string, next: string): string[] {
-  const prevMap = createLayoutContentRequest(prev);
-  const nextMap = createLayoutContentRequest(next);
-  return Object.keys(nextMap).filter(
-    (k) =>
-      nextMap[k]?.type === "page" ||
-      JSON.stringify(nextMap[k]) !== JSON.stringify(prevMap[k]),
-  );
+  return;
 }
 
 /**
  * @example
- * "/" => ["/"]
- * "/a" => ["/", "/a"]
- * "/a/b" => ["/", "/a", "/a/b"]
+ * isAncestorPath("/x", "/x") === true
+ * isAncestorPath("/x", "/x/y") === true
+ * isAncestorPath("/x", "/xx/y") === false
  */
-export function getPathPrefixes(pathname: string) {
-  pathname = pathname.replaceAll(/\/*$/g, "");
-  const keys = pathname.split("/");
-  return keys.map((_key, i) => keys.slice(0, i + 1).join("/") || "/");
+export function isAncestorPath(p1: string, p2: string) {
+  // check prefix after trailing slash
+  return p2.replace(/\/*$/, "/").startsWith(p1.replace(/\/*$/, "/"));
 }
 
-// strip trailing slash
-export function normalizePathname(pathname: string) {
-  return pathname.replaceAll(/\/*$/g, "") || "/";
+/**
+ * @example
+ * "/" => [""]
+ * "/a" => ["", "a"]
+ * "/a/b" => ["", "a", "b"]
+ */
+export function splitToSegments(pathname: string): string[] {
+  return pathname === "/" ? [""] : pathname.split("/");
+}
+
+/** reverse of `splitToSegments` */
+export function joinSegments(segments: string[]): string {
+  return segments.join("/") || "/";
 }

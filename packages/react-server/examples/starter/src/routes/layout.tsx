@@ -1,3 +1,4 @@
+import "../style.css";
 import { Link } from "@hiogawa/react-server/client";
 
 export default function Layout(props: React.PropsWithChildren) {
@@ -7,6 +8,7 @@ export default function Layout(props: React.PropsWithChildren) {
         <meta charSet="UTF-8" />
         <title>React Server Starter</title>
         <link rel="icon" href="/favicon.ico" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
       </head>
       <body>
         <h3>React Server Starter</h3>

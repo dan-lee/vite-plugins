@@ -4,3 +4,5 @@ dist
 .vite-node
 .wrangler
 *.log
+*.tgz
+test-results

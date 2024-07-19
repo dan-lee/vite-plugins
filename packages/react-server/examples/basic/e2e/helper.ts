@@ -1,5 +1,20 @@
 import fs from "node:fs";
 import test, { type Page, expect } from "@playwright/test";
+import type { Manifest } from "vite";
+
+export async function waitForHydration(page: Page) {
+  await expect(page.getByText("[hydrated: 1]")).toBeVisible();
+}
+
+export async function setupCheckClientState(page: Page) {
+  // setup client state
+  await page.getByPlaceholder("test-input").fill("hello");
+
+  return async () => {
+    // verify client state is preserved
+    await expect(page.getByPlaceholder("test-input")).toHaveValue("hello");
+  };
+}
 
 //
 // page error check
@@ -69,4 +84,14 @@ export async function inspectDevModules<T extends string>(
     const res = await page.request.post("/__react_server_dev", { data });
     return await res.json();
   }
+}
+
+export const testNoJs = test.extend({
+  javaScriptEnabled: ({}, use) => use(false),
+});
+
+export function getClientManifest(): Manifest {
+  return JSON.parse(
+    fs.readFileSync("dist/client/.vite/manifest.json", "utf-8"),
+  );
 }

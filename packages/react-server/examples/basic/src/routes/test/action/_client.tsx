@@ -1,98 +1,60 @@
 "use client";
 
-import { useActionState } from "@hiogawa/react-server/client";
 import React from "react";
 import ReactDom from "react-dom";
+import { useHydrated } from "../_client";
 import {
   actionBindTest,
   actionCheckAnswer,
   addMessage,
-  changeCounter,
+  clearMessages,
   type getMessages,
   nonFormAction,
   slowAction,
 } from "./_action";
-
-export function Counter(props: { value: number }) {
-  return (
-    <form action={changeCounter} className="flex flex-col items-start gap-2">
-      <div className="font-bold">Count: {props.value}</div>
-      <div className="flex gap-2">
-        <button
-          className="antd-btn antd-btn-default px-2"
-          name="delta"
-          value={-1}
-        >
-          -1
-        </button>
-        <button
-          className="antd-btn antd-btn-default px-2"
-          name="delta"
-          value={+1}
-        >
-          +1
-        </button>
-        <div>(client form importing "use server")</div>
-      </div>
-    </form>
-  );
-}
-
-export function Counter2({
-  action,
-}: {
-  action: JSX.IntrinsicElements["form"]["action"];
-}) {
-  return (
-    <form action={action} className="flex flex-col items-start gap-2">
-      <div className="flex gap-2">
-        <button
-          className="antd-btn antd-btn-default px-2"
-          name="delta"
-          value={-1}
-        >
-          -1
-        </button>
-        <button
-          className="antd-btn antd-btn-default px-2"
-          name="delta"
-          value={+1}
-        >
-          +1
-        </button>
-        <div>(client form with action via server prop)</div>
-      </div>
-    </form>
-  );
-}
+import { actionReturnComponent } from "./_action2";
 
 export function Chat(props: { messages: ReturnType<typeof getMessages> }) {
-  const [input, setInput] = React.useState("");
+  // cf. https://react.dev/reference/react/useOptimistic#optimistically-updating-with-forms
+  const [optMessages, addOptMessage] = React.useOptimistic(
+    props.messages,
+    (prev, data: string) => prev.concat({ id: 0, data }),
+  );
 
-  // clear input after submit (really this way?)
-  React.useEffect(() => {
-    setInput("");
-  }, [props.messages]);
+  const [, addMessageClient, isPending] = React.useActionState(
+    async (_: unknown, formData: FormData) => {
+      addOptMessage(formData.get("message") as any);
+      await addMessage(formData);
+    },
+    null,
+  );
+  const formAction = useHydrated() ? addMessageClient : addMessage;
 
   return (
     <div className="flex flex-col gap-2">
-      <h4 className="font-bold">Messages</h4>
+      <div className="flex items-center gap-2">
+        <h4 className="font-bold">Messages</h4>
+        <form action={clearMessages}>
+          <button className="antd-btn antd-btn-default px-2 text-sm">
+            Clear
+          </button>
+        </form>
+      </div>
       <ul>
-        {props.messages.map(([id, message]) => (
-          <li key={id}>
-            [{id}] {message}
+        {optMessages.map(({ id, data }, i) => (
+          <li key={i} className={id === 0 ? "text-colorTextSecondary" : ""}>
+            [{id || "?"}] {data}
           </li>
         ))}
       </ul>
-      <form className="flex flex-col items-start gap-2" action={addMessage}>
+      <form className="flex flex-col items-start gap-2" action={formAction}>
         <div className="flex gap-2">
           <input
             name="message"
             className="antd-input px-2"
             placeholder="write something..."
             required
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
+            disabled={isPending}
           />
           <button className="antd-btn antd-btn-default px-2">Send</button>
         </div>
@@ -102,7 +64,10 @@ export function Chat(props: { messages: ReturnType<typeof getMessages> }) {
 }
 
 export function ActionDataTest() {
-  const [data, formAction, isPending] = useActionState(actionCheckAnswer, null);
+  const [data, formAction, isPending] = React.useActionState(
+    actionCheckAnswer,
+    null,
+  );
 
   return (
     <form action={formAction} className="flex flex-col gap-2">
@@ -113,6 +78,7 @@ export function ActionDataTest() {
           className="antd-input px-2 max-w-30"
           name="answer"
           placeholder="Answer?"
+          defaultValue={data?.answer}
           required
         />
         <div data-testid="action-state">
@@ -131,7 +97,10 @@ export function ActionDataTest() {
 }
 
 export function NonFormActionTest() {
-  const [data, formAction, isPending] = useActionState(nonFormAction, null);
+  const [data, formAction, isPending] = React.useActionState(
+    nonFormAction,
+    null,
+  );
   return (
     <form
       className="flex flex-col gap-2"
@@ -139,7 +108,7 @@ export function NonFormActionTest() {
         e.preventDefault();
         const formData = new FormData(e.currentTarget);
         const delta = Number(formData.get("delta"));
-        formAction(delta);
+        React.startTransition(() => formAction(delta));
       }}
     >
       <h4 className="font-bold">Non-form-action action</h4>
@@ -234,4 +203,54 @@ function formDataToJson(data: FormData) {
     result[k] = v;
   });
   return result;
+}
+
+export function TestActionReturnComponent() {
+  const [node, setNode] = React.useState<React.ReactNode>(null);
+  return (
+    <div
+      className="flex flex-col gap-2 items-start"
+      data-testid="action-return-component"
+    >
+      <h3 className="font-bold">TestActionReturnComponent</h3>
+      <div className="flex items-center gap-2">
+        <form
+          action={async () => {
+            setNode(await actionReturnComponent());
+          }}
+        >
+          <button className="antd-btn antd-btn-default px-2">Action</button>
+        </form>
+        Result: {node ?? "(none)"}
+      </div>
+    </div>
+  );
+}
+
+export function TestActionErrorTryCatch(props: {
+  action: () => Promise<void>;
+}) {
+  const [error, setError] = React.useState<unknown>();
+  return (
+    <div className="flex flex-col gap-2 items-start">
+      <div className="flex items-center gap-2">
+        <form
+          action={async () => {
+            try {
+              await props.action();
+            } catch (e) {
+              setError(e);
+            }
+          }}
+        >
+          <button className="antd-btn antd-btn-default px-2">
+            TestActionErrorTryCatch
+          </button>
+        </form>
+        <div data-testid="action-error-result">
+          Result: {error ? String(error) : "(none)"}
+        </div>
+      </div>
+    </div>
+  );
 }

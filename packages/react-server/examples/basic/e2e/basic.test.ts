@@ -1,5 +1,13 @@
 import { type Page, expect, test } from "@playwright/test";
-import { checkNoError, editFile, inspectDevModules } from "./helper";
+import {
+  checkNoError,
+  editFile,
+  getClientManifest,
+  inspectDevModules,
+  setupCheckClientState,
+  testNoJs,
+  waitForHydration,
+} from "./helper";
 
 test("basic", async ({ page }) => {
   checkNoError(page);
@@ -114,12 +122,22 @@ test("Link modifier", async ({ page, context }) => {
   await page.waitForURL("/test");
 });
 
+test("Link onClick merge", async ({ page }) => {
+  checkNoError(page);
+  await page.goto("/test/other");
+  await waitForHydration(page);
+  await page.getByText("Count: 0").click();
+  await page.getByRole("link", { name: "LinkOnClickMerge" }).click();
+  await page.getByText("Count: 1").click();
+  await page.waitForURL("/test/other?count");
+});
+
 test("error", async ({ page }) => {
   const res = await page.goto("/test/error-not-found");
   expect(res?.status()).toBe(404);
 
   await waitForHydration(page);
-  await page.getByText(`server error: {"status":404}`).click();
+  await page.getByText(`NotFoundPage`).click();
 
   const checkClientState = await setupCheckClientState(page);
 
@@ -154,7 +172,76 @@ test("error", async ({ page }) => {
   await checkClientState();
 });
 
-test("DefaultRootErrorPage", async ({ page }) => {
+test("error boundary @js", async ({ page }) => {
+  await page.goto("/test/error/boundary");
+  await waitForHydration(page);
+  await page.getByText("boundary/page.tsx").click();
+
+  await page
+    .getByRole("link", { name: "• /test/error/boundary/dir/redirect" })
+    .click();
+  await page.getByText("boundary/dir/[id]/page.tsx").click();
+  await page.getByText('{"id":"ok"}').click();
+
+  await page
+    .getByRole("link", { name: "• /test/error/boundary/dir/not-found" })
+    .click();
+  await page.getByText("boundary/not-found.tsx").click();
+
+  await page
+    .getByRole("link", { name: "• /test/error/boundary/dir/unexpected" })
+    .click();
+  await page.getByText("boundary/dir/error.tsx").click();
+
+  await page
+    .getByRole("link", { name: "• /test/error/boundary/dir", exact: true })
+    .click();
+  await page.getByText("boundary/dir/page.tsx").click();
+});
+
+testNoJs("error boundary @nojs", async ({ page }) => {
+  await page.goto("/test/error/boundary");
+  await page.getByText("boundary/page.tsx").click();
+
+  // redirect error works
+  await page
+    .getByRole("link", { name: "• /test/error/boundary/dir/redirect" })
+    .click();
+  await page.getByText("boundary/dir/[id]/page.tsx").click();
+  await page.getByText('{"id":"ok"}').click();
+
+  // other errors don't work
+  {
+    await page.goto("/test/error/boundary");
+    const repsonsePromise = page.waitForResponse(
+      "/test/error/boundary/dir/not-found",
+    );
+    await page
+      .getByRole("link", { name: "• /test/error/boundary/dir/not-found" })
+      .click();
+    const response = await repsonsePromise;
+    expect(response.status()).toBe(404);
+  }
+
+  {
+    await page.goto("/test/error/boundary");
+    const repsonsePromise = page.waitForResponse(
+      "/test/error/boundary/dir/unexpected",
+    );
+    await page
+      .getByRole("link", { name: "• /test/error/boundary/dir/unexpected" })
+      .click();
+    const response = await repsonsePromise;
+    expect(response.status()).toBe(500);
+  }
+});
+
+testNoJs("ssr not-found @nojs", async ({ page }) => {
+  await page.goto("/test/error/not-found");
+  await page.getByText(`NotFoundPage`).click();
+});
+
+test("default not-found page", async ({ page }) => {
   const res = await page.goto("/not-found");
   expect(res?.status()).toBe(404);
   await page.getByText("404 Not Found").click();
@@ -176,6 +263,11 @@ test("rsc hmr @dev", async ({ page }) => {
   await waitForHydration(page);
 
   await checkClientState();
+
+  const res = await page.reload();
+  await waitForHydration(page);
+  const resText = await res?.text();
+  expect(resText).toContain("RSC (EDIT) Experiment");
 });
 
 test("common hmr @dev", async ({ page }) => {
@@ -196,6 +288,16 @@ test("common hmr @dev", async ({ page }) => {
   await waitForHydration(page);
 
   await checkClientState();
+
+  const res = await page.reload();
+  await waitForHydration(page);
+  const resText = await res?.text();
+  expect(resText).toContain(
+    "Common (EDIT) component (<!-- -->from server<!-- -->)",
+  );
+  expect(resText).toContain(
+    "Common (EDIT) component (<!-- -->from client<!-- -->)",
+  );
 });
 
 test("client hmr @dev", async ({ page }) => {
@@ -216,8 +318,10 @@ test("client hmr @dev", async ({ page }) => {
   await checkClientState();
 
   // SSR should also use a fresh module
-  const res = await page.request.get("/test");
-  expect(await res.text()).toContain("<div>test-hmr-edit-div</div>");
+  const res = await page.reload();
+  await waitForHydration(page);
+  const resText = await res?.text();
+  expect(resText).toContain("<div>test-hmr-edit-div</div>");
 });
 
 test("rsc + client + rsc hmr @dev", async ({ page }) => {
@@ -239,26 +343,28 @@ test("rsc + client + rsc hmr @dev", async ({ page }) => {
 
   // edit client
   await editFile("./src/components/counter.tsx", (s) =>
-    s.replace("test-hmr-div", "test-hmr-edit-div"),
+    s.replace("test-hmr-div", "test-hmr-edit1-div"),
   );
-  await page.getByText("test-hmr-edit-div").click();
+  await page.getByText("test-hmr-edit1-div").click();
   await page.getByText("Count: 1").click();
 
-  // edit server again re-mounts client
+  // edit server again
   await editFile("./src/routes/test/page.tsx", (s) =>
     s.replace("Server (EDIT 1) Time", "Server (EDIT 2) Time"),
   );
   await page.getByText("Server (EDIT 2) Time").click();
-  await page.getByText("Count: 0").click();
+  await page.getByText("Count: 1").click();
 
-  // edit client again should work
-  await page.getByRole("button", { name: "+" }).click();
-  await page.getByText("Count: 1").click();
+  // edit client again
   await editFile("./src/components/counter.tsx", (s) =>
-    s.replace("test-hmr-edit-div", "test-hmr-edit-edit-div"),
+    s.replace("test-hmr-edit1-div", "test-hmr-edit2-div"),
   );
-  await page.getByText("test-hmr-edit-edit-div").click();
+  await page.getByText("test-hmr-edit2-div").click();
   await page.getByText("Count: 1").click();
+
+  // check no hydration error after reload
+  await page.reload();
+  await waitForHydration(page);
 });
 
 test.skip("module invalidation @dev", async ({ page }) => {
@@ -268,21 +374,21 @@ test.skip("module invalidation @dev", async ({ page }) => {
   await waitForHydration(page);
 
   const moduleUrls = [
+    "/src/adapters/node.ts",
     "/src/entry-server",
-    "/src/entry-react-server",
     "/src/routes/test/page",
     "/src/components/counter",
-    "@hiogawa/react-server/entry-server",
-    "@hiogawa/react-server/entry-react-server",
+    "@hiogawa/react-server/entry/ssr",
+    "@hiogawa/react-server/entry/server",
   ] as const;
 
   const result = await inspectDevModules(page, moduleUrls);
   expect(result).toMatchObject({
-    "/src/entry-server": {
+    "/src/adapters/node.ts": {
       ssr: expect.any(Object),
       "react-server": false,
     },
-    "/src/entry-react-server": {
+    "/src/entry-server": {
       ssr: false,
       "react-server": expect.any(Object),
     },
@@ -294,11 +400,11 @@ test.skip("module invalidation @dev", async ({ page }) => {
       ssr: expect.any(Object),
       "react-server": expect.any(Object),
     },
-    "@hiogawa/react-server/entry-server": {
+    "@hiogawa/react-server/entry/ssr": {
       ssr: expect.any(Object),
       "react-server": false,
     },
-    "@hiogawa/react-server/entry-react-server": {
+    "@hiogawa/react-server/entry/server": {
       ssr: false,
       "react-server": expect.any(Object),
     },
@@ -310,12 +416,11 @@ test.skip("module invalidation @dev", async ({ page }) => {
 
   const result2 = await inspectDevModules(page, moduleUrls);
   expect([
-    result["/src/entry-server"].ssr.lastInvalidationTimestamp,
-    result["/src/entry-react-server"]["react-server"].lastInvalidationTimestamp,
+    result["/src/adapters/node.ts"].ssr.lastInvalidationTimestamp,
+    result["/src/entry-server"]["react-server"].lastInvalidationTimestamp,
   ]).toEqual([
-    result2["/src/entry-server"].ssr.lastInvalidationTimestamp,
-    result2["/src/entry-react-server"]["react-server"]
-      .lastInvalidationTimestamp,
+    result2["/src/adapters/node.ts"].ssr.lastInvalidationTimestamp,
+    result2["/src/entry-server"]["react-server"].lastInvalidationTimestamp,
   ]);
 
   // updating client component invalidates react-server entry
@@ -327,12 +432,12 @@ test.skip("module invalidation @dev", async ({ page }) => {
   await page.getByText("test-hmr-edit-div").click();
 
   const result3 = await inspectDevModules(page, moduleUrls);
-  expect([result["/src/entry-server"].ssr.lastInvalidationTimestamp]).toEqual([
-    result3["/src/entry-server"].ssr.lastInvalidationTimestamp,
-  ]);
+  expect([
+    result["/src/adapters/node.ts"].ssr.lastInvalidationTimestamp,
+  ]).toEqual([result3["/src/adapters/node.ts"].ssr.lastInvalidationTimestamp]);
 
   const changed = [
-    ["/src/entry-react-server", "react-server"],
+    ["/src/entry-server", "react-server"],
     ["/src/routes/test/page", "react-server"],
     ["/src/components/counter", "react-server"],
     ["/src/components/counter", "ssr"],
@@ -390,7 +495,7 @@ test("unocss hmr @dev", async ({ page, browser }) => {
   ).toHaveCSS("font-weight", "300");
 });
 
-test("react-server css", async ({ page }) => {
+test("react-server css @js", async ({ page }) => {
   checkNoError(page);
 
   await page.goto("/test/css");
@@ -404,9 +509,7 @@ test("react-server css", async ({ page }) => {
   );
 });
 
-test("react-server css @nojs", async ({ browser }) => {
-  const page = await browser.newPage({ javaScriptEnabled: false });
-
+testNoJs("react-server css @nojs", async ({ page }) => {
   await page.goto("/test/css");
   await expect(page.getByText("css normal")).toHaveCSS(
     "background-color",
@@ -467,60 +570,122 @@ test("react-server css hmr @dev", async ({ page, browser }) => {
   }
 });
 
-test("server action with js", async ({ page }) => {
+test("client css @js", async ({ page }) => {
   checkNoError(page);
 
-  await page.goto("/test/action");
+  await page.goto("/test/css");
+  await expect(page.getByText("css client normal")).toHaveCSS(
+    "background-color",
+    "rgb(250, 250, 200)",
+  );
+  await expect(page.getByText("css client module")).toHaveCSS(
+    "background-color",
+    "rgb(200, 250, 250)",
+  );
+});
+
+testNoJs("client css @nojs", async ({ page }) => {
+  await page.goto("/test/css");
+  await expect(page.getByText("css client normal")).toHaveCSS(
+    "background-color",
+    "rgb(250, 250, 200)",
+  );
+  await expect(page.getByText("css client module")).toHaveCSS(
+    "background-color",
+    "rgb(200, 250, 250)",
+  );
+});
+
+test("client css hmr @dev", async ({ page, browser }) => {
+  checkNoError(page);
+
+  await page.goto("/test/css");
   await waitForHydration(page);
 
   const checkClientState = await setupCheckClientState(page);
 
-  await page.getByText("Count: 0").click();
-  await page.getByRole("button", { name: "+1" }).first().click();
-  await page.getByText("Count: 1").click();
-  await page.getByRole("button", { name: "+1" }).nth(1).click();
-  await page.getByText("Count: 2").click();
-  await page.getByRole("button", { name: "+1" }).nth(2).click();
-  await page.getByText("Count: 3").click();
-  await page.getByRole("button", { name: "-1" }).first().click();
-  await page.getByText("Count: 2").click();
-  await page.getByRole("button", { name: "-1" }).nth(1).click();
-  await page.getByText("Count: 1").click();
-  await page.getByRole("button", { name: "-1" }).nth(2).click();
-  await page.getByText("Count: 0").click();
+  await expect(page.getByText("css client normal")).toHaveCSS(
+    "background-color",
+    "rgb(250, 250, 200)",
+  );
+  await editFile("./src/routes/test/css/css-client-normal.css", (s) =>
+    s.replace("rgb(250, 250, 200)", "rgb(250, 250, 123)"),
+  );
+  await expect(page.getByText("css client normal")).toHaveCSS(
+    "background-color",
+    "rgb(250, 250, 123)",
+  );
 
   await checkClientState();
 
-  // check layout doesn't re-render
-  const count = process.env.E2E_PREVIEW ? 1 : 1;
-  await page.getByText(`[effect: ${count}]`).click();
+  // verify new style is applied without js
+  {
+    const page = await browser.newPage({ javaScriptEnabled: false });
+    await page.goto("/test/css");
+    await expect(page.getByText("css client normal")).toHaveCSS(
+      "background-color",
+      "rgb(250, 250, 123)",
+    );
+  }
 });
 
-test("server action after client render", async ({ page }) => {
+test("client css module hmr @dev", async ({ page, browser }) => {
+  checkNoError(page);
+
+  await page.goto("/test/css");
+  await waitForHydration(page);
+
+  const checkClientState = await setupCheckClientState(page);
+
+  await expect(page.getByText("css client module")).toHaveCSS(
+    "background-color",
+    "rgb(200, 250, 250)",
+  );
+  await editFile("./src/routes/test/css/css-client-module.module.css", (s) =>
+    s.replace("rgb(200, 250, 250)", "rgb(123, 250, 250)"),
+  );
+  await expect(page.getByText("css client module")).toHaveCSS(
+    "background-color",
+    "rgb(123, 250, 250)",
+  );
+
+  await checkClientState();
+
+  // verify new style is applied without js
+  {
+    const page = await browser.newPage({ javaScriptEnabled: false });
+    await page.goto("/test/css");
+    await expect(page.getByText("css client module")).toHaveCSS(
+      "background-color",
+      "rgb(123, 250, 250)",
+    );
+  }
+});
+
+testNoJs("useServerInsertedHTML @nojs", async ({ page }) => {
+  await page.goto("/test/css/in-js");
+  await expect(page.getByText("CSS in JS")).toHaveCSS(
+    "background-color",
+    "rgb(250, 220, 220)",
+  );
+});
+
+test("server action @js", async ({ page }) => {
   checkNoError(page);
 
   await page.goto("/test");
   await waitForHydration(page);
 
   // on client render, the form doesn't have hidden $ACTION_ID_...
-  await page.getByRole("link", { name: "/test/action" }).click();
+  await page.getByRole("link", { name: "/test/action/extra" }).nth(0).click();
+  await waitForHydration(page);
 
   const checkClientState = await setupCheckClientState(page);
-
-  await page.getByText("Count: 0").click();
-  await page.getByRole("button", { name: "+1" }).first().click();
-  await page.getByText("Count: 1").click();
-  await page.getByRole("button", { name: "+1" }).nth(1).click();
-  await page.getByText("Count: 2").click();
-  await page.getByRole("button", { name: "+1" }).nth(2).click();
-  await page.getByText("Count: 3").click();
-  await page.getByRole("button", { name: "-1" }).first().click();
-  await page.getByText("Count: 2").click();
-  await page.getByRole("button", { name: "-1" }).nth(1).click();
-  await page.getByText("Count: 1").click();
-  await page.getByRole("button", { name: "-1" }).nth(2).click();
-  await page.getByText("Count: 0").click();
-
+  await testServerAction(page, "counter1");
+  await testServerAction(page, "counter2");
+  await testServerAction(page, "counter3");
+  await testServerAction(page, "counter4");
+  await testServerAction(page, "counter5");
   await checkClientState();
 
   // check layout doesn't re-render
@@ -528,23 +693,52 @@ test("server action after client render", async ({ page }) => {
   await page.getByText(`[effect: ${count}]`).click();
 });
 
-test("server action no js", async ({ browser }) => {
-  const page = await browser.newPage({ javaScriptEnabled: false });
-  await page.goto("/test/action");
-  await page.getByText("Count: 0").click();
-  await page.getByRole("button", { name: "+1" }).first().click();
-  await page.getByText("Count: 1").click();
-  await page.getByRole("button", { name: "+1" }).nth(1).click();
-  await page.getByText("Count: 2").click();
-  await page.getByRole("button", { name: "+1" }).nth(2).click();
-  await page.getByText("Count: 3").click();
-  await page.getByRole("button", { name: "-1" }).first().click();
-  await page.getByText("Count: 2").click();
-  await page.getByRole("button", { name: "-1" }).nth(1).click();
-  await page.getByText("Count: 1").click();
-  await page.getByRole("button", { name: "-1" }).nth(2).click();
-  await page.getByText("Count: 0").click();
+testNoJs("server action @nojs", async ({ page }) => {
+  checkNoError(page);
+  await page.goto("/test/action/extra");
+  await testServerAction(page, "counter1");
+  await testServerAction(page, "counter2");
+  await testServerAction(page, "counter3");
+  await testServerAction(page, "counter4");
+  await testServerAction(page, "counter5");
 });
+
+async function testServerAction(page: Page, testId: string) {
+  await page.getByTestId(testId).getByText("Count: 0").click();
+  await page.getByTestId(testId).getByRole("button", { name: "+" }).click();
+  await page.getByTestId(testId).getByText("Count: 1").click();
+  await page.getByTestId(testId).getByRole("button", { name: "-" }).click();
+  await page.getByTestId(testId).getByText("Count: 0").click();
+}
+
+test("server action and useOptimistic @js", async ({ page }) => {
+  await page.goto("/test/action");
+  await waitForHydration(page);
+  await testServerActionOptimistic(page, { js: true });
+});
+
+testNoJs("server action and useOptimistic @nojs", async ({ page }) => {
+  await page.goto("/test/action");
+  await testServerActionOptimistic(page, { js: false });
+});
+
+async function testServerActionOptimistic(
+  page: Page,
+  options: { js: boolean },
+) {
+  await page.getByPlaceholder("write something...").fill("first");
+  await page.getByPlaceholder("write something...").press("Enter");
+  if (options.js) {
+    await page.getByText("[?] first").click(); // optimistic state
+  }
+  await page.getByText("[1] first").click();
+  await expect(page.getByPlaceholder("write something...")).toHaveValue(""); // auto reset
+  await page.getByText("[1] first").click();
+  await page.getByPlaceholder("write something...").fill("second");
+  await page.getByPlaceholder("write something...").press("Enter");
+  await page.getByText("[2] second").click();
+  await page.getByRole("button", { name: "Clear" }).click();
+}
 
 test("ReactDom.useFormStatus", async ({ page }) => {
   await page.goto("/test/action");
@@ -552,6 +746,58 @@ test("ReactDom.useFormStatus", async ({ page }) => {
   await page.getByRole("button", { name: "1.0 sec" }).click();
   await page.getByText("pending: true").click();
   await page.getByText("pending: false").click();
+});
+
+test("action returning component", async ({ page }) => {
+  await page.goto("/test/action");
+  await waitForHydration(page);
+  await page
+    .getByTestId("action-return-component")
+    .getByRole("button", { name: "Action" })
+    .click();
+  await page.getByText("[server] Loading...").click();
+  await page.getByRole("button", { name: "[client] counter: 0" }).click();
+  await page.getByRole("button", { name: "[client] counter: 1" }).click();
+  await page.getByText("[server] OK!").click();
+});
+
+test("higher order action @js", async ({ page }) => {
+  await page.goto("/test/action");
+  await waitForHydration(page);
+  await testHigherOrderAction(page);
+});
+
+testNoJs("higher order action @nojs", async ({ page }) => {
+  await page.goto("/test/action");
+  await testHigherOrderAction(page);
+});
+
+async function testHigherOrderAction(page: Page) {
+  await expect(page.getByTestId("higher-order-result")).toHaveText("(none)");
+  await page.getByRole("button", { name: "Higher Order" }).click();
+  await expect(page.getByTestId("higher-order-result")).toHaveText("ok");
+  await page.getByRole("button", { name: "Higher Order" }).click();
+  await expect(page.getByTestId("higher-order-result")).toHaveText("(none)");
+}
+
+test("action error caught by try/catch", async ({ page }) => {
+  await page.goto("/test/action");
+  await waitForHydration(page);
+  await expect(page.getByTestId("action-error-result")).toHaveText(
+    "Result: (none)",
+  );
+  await page.getByRole("button", { name: "TestActionErrorTryCatch" }).click();
+  await expect(page.getByTestId("action-error-result")).toContainText(
+    "Result: Error: ReactServerError",
+  );
+});
+
+test("action error triggers boundary", async ({ page }) => {
+  await page.goto("/test/action");
+  await waitForHydration(page);
+  await page.getByRole("button", { name: "TestActionErrorBoundary" }).click();
+  await page.getByRole("heading", { name: "ErrorPage" }).click();
+  await page.getByText('server error: {"status":500}').click();
 });
 
 test("use client > virtual module", async ({ page }) => {
@@ -575,6 +821,50 @@ test("server compnoent > fixture", async ({ page }) => {
   await page.getByText("TestDepServerComponent").click();
 });
 
+test("server-client-mixed package", async ({ page }) => {
+  await page.goto("/test/deps");
+  await page.getByText("TestDepMixed(Server)").click();
+  await waitForHydration(page);
+  await page.getByRole("button", { name: "TestDepMixed(Client): 0" }).click();
+  await page.getByRole("button", { name: "TestDepMixed(Client): 1" }).click();
+});
+
+test("tolerate export all with use client", async ({ page }) => {
+  await page.goto("/test/deps");
+  await waitForHydration(page);
+  await page
+    .getByRole("button", { name: "TestDepReExportExplicit: 0" })
+    .click();
+  await page
+    .getByRole("button", { name: "TestDepReExportExplicit: 1" })
+    .click();
+});
+
+test("client module used at boundary and non-boundary basic", async ({
+  page,
+}) => {
+  await page.goto("/test/deps");
+  await page.getByText("Client2Context [ok]").click();
+});
+
+test("client module used at boundary and non-boundary hmr @dev", async ({
+  page,
+}) => {
+  await page.goto("/test/deps");
+  await page.getByText("Client2Context [ok]").click();
+
+  await waitForHydration(page);
+
+  await editFile("./src/routes/test/deps/_client2.tsx", (s) =>
+    s.replace(`value="ok"`, `value="okok"`),
+  );
+  await page.getByText("Client2Context [okok]").click();
+
+  await page.reload();
+  await waitForHydration(page);
+  await page.getByText("Client2Context [okok]").click();
+});
+
 test("RouteProps.request", async ({ page }) => {
   await page.goto("/test/other");
   await waitForHydration(page);
@@ -583,7 +873,7 @@ test("RouteProps.request", async ({ page }) => {
   await page.getByText('searchParams = {"hello":""}').click();
 });
 
-test("custom entry-react-server", async ({ request }) => {
+test("custom entry-server", async ({ request }) => {
   const res = await request.get("/test/__rpc");
   expect(await res.json()).toEqual({ hello: "world" });
 });
@@ -611,8 +901,7 @@ test("head in rsc", async ({ page }) => {
   );
 });
 
-test("redirect server component @nojs", async ({ browser }) => {
-  const page = await browser.newPage({ javaScriptEnabled: false });
+testNoJs("redirect server component @nojs", async ({ page }) => {
   checkNoError(page);
 
   const res = await page.request.get("/test/redirect?from-server-component", {
@@ -625,7 +914,8 @@ test("redirect server component @nojs", async ({ browser }) => {
   expect(await res.text()).toBe("");
 
   await page.goto("/test/redirect");
-  await page.getByRole("link", { name: "From Server Component" }).click();
+  await page.getByRole("link", { name: "Server Component" }).click();
+  await page.getByText("ok=server-component").click();
   await page.waitForURL("/test/redirect?ok=server-component");
 });
 
@@ -634,24 +924,34 @@ test("redirect server component @js", async ({ page }) => {
 
   await page.goto("/test/redirect");
   await waitForHydration(page);
-  await page.getByRole("link", { name: "From Server Component" }).click();
+  await page.getByRole("link", { name: "Server Component" }).click();
+  await page.getByText("ok=server-component").click();
   await page.waitForURL("/test/redirect?ok=server-component");
 });
 
-test("redirect server action @nojs", async ({ browser }) => {
-  const page = await browser.newPage({ javaScriptEnabled: false });
+testNoJs("redirect server action @nojs", async ({ page }) => {
   checkNoError(page);
 
   await page.goto("/test/redirect");
-  await page.getByRole("button", { name: "From Server Action" }).click();
+  await page.getByRole("button", { name: "Action" }).click();
+  await page.getByText("ok=server-action").click();
   await page.waitForURL("/test/redirect?ok=server-action");
 });
 
 test("redirect server action @js", async ({ page }) => {
   await page.goto("/test/redirect");
   await waitForHydration(page);
-  await page.getByRole("button", { name: "From Server Action" }).click();
+  await page.getByRole("button", { name: "Action" }).click();
   await page.waitForURL("/test/redirect?ok=server-action");
+});
+
+test("redirect suspense @js", async ({ page }) => {
+  await page.goto("/test/redirect");
+  await waitForHydration(page);
+  await page.getByRole("link", { name: "Suspense" }).click();
+  await page.getByText("fallback until redirect...").click();
+  await page.getByText("ok=suspense").click();
+  await page.waitForURL("/test/redirect?ok=suspense");
 });
 
 test("useActionState @js", async ({ page }) => {
@@ -661,8 +961,7 @@ test("useActionState @js", async ({ page }) => {
   await testUseActionState(page, { js: true });
 });
 
-test("useActionState @nojs", async ({ browser }) => {
-  const page = await browser.newPage({ javaScriptEnabled: false });
+testNoJs("useActionState @nojs", async ({ page }) => {
   checkNoError(page);
   await page.goto("/test/action");
   await testUseActionState(page, { js: false });
@@ -675,9 +974,7 @@ async function testUseActionState(page: Page, options: { js: boolean }) {
     await expect(page.getByTestId("action-state")).toHaveText("...");
   }
   await page.getByText("Wrong! (tried once)").click();
-  await expect(page.getByPlaceholder("Answer?")).toHaveValue(
-    options.js ? "3" : "",
-  );
+  await expect(page.getByPlaceholder("Answer?")).toHaveValue("3");
 
   await page.getByPlaceholder("Answer?").fill("2");
   await page.getByPlaceholder("Answer?").press("Enter");
@@ -704,8 +1001,7 @@ test("action bind @js", async ({ page }) => {
   await testActionBind(page);
 });
 
-test("action bind @nojs", async ({ browser }) => {
-  const page = await browser.newPage({ javaScriptEnabled: false });
+testNoJs("action bind @nojs", async ({ page }) => {
   checkNoError(page);
   await page.goto("/test/action");
   await testActionBind(page);
@@ -724,8 +1020,7 @@ test("action context @js", async ({ page }) => {
   await testActionContext(page);
 });
 
-test("action context @nojs", async ({ browser }) => {
-  const page = await browser.newPage({ javaScriptEnabled: false });
+testNoJs("action context @nojs", async ({ page }) => {
   checkNoError(page);
   await page.goto("/test/session");
   await testActionContext(page);
@@ -792,6 +1087,46 @@ test("revalidate on navigation", async ({ page }) => {
   await checkClientState();
 });
 
+test("revalidate by path on action", async ({ page }) => {
+  checkNoError(page);
+
+  await page.goto("/test/revalidate/x");
+  await waitForHydration(page);
+
+  const checkClientState = await setupCheckClientState(page);
+
+  const count = process.env.E2E_PREVIEW ? 1 : 1;
+  await page.getByText(`[effect: ${count}]`).click();
+  await page.getByText(`[effect-revalidate: ${count}]`).click();
+  await page
+    .getByRole("button", { name: 'action revalidate "/test/revalidate"' })
+    .click();
+  await page.getByText(`[effect: ${count}]`).click();
+  await page.getByText(`[effect-revalidate: ${count + 1}]`).click();
+
+  await checkClientState();
+});
+
+test("revalidate by path on navigation", async ({ page }) => {
+  checkNoError(page);
+
+  await page.goto("/test/revalidate/x");
+  await waitForHydration(page);
+
+  const checkClientState = await setupCheckClientState(page);
+
+  const count = process.env.E2E_PREVIEW ? 1 : 1;
+  await page.getByText(`[effect: ${count}]`).click();
+  await page.getByText(`[effect-revalidate: ${count}]`).click();
+  await page
+    .getByRole("link", { name: 'link revalidate "/test/revalidate"' })
+    .click();
+  await page.getByText(`[effect: ${count}]`).click();
+  await page.getByText(`[effect-revalidate: ${count + 1}]`).click();
+
+  await checkClientState();
+});
+
 test("dynamic routes", async ({ page }) => {
   checkNoError(page);
 
@@ -817,8 +1152,13 @@ test("dynamic routes", async ({ page }) => {
   await page.getByRole("link", { name: "• /test/dynamic/abc/def" }).click();
   await page.getByText("file: /test/dynamic/[id]/[nested]/page.tsx").click();
   await page.getByText("pathname: /test/dynamic/abc/def").click();
+  await page.getByText("pathname (client): /test/dynamic/abc/def").click();
+  await page.getByText("pathname (server): /test/dynamic/abc/def").click();
   await page.getByText('params: {"id":"abc","nested":"def"}').click();
 
+  // regardless of Link.href prop
+  // - pathname is always encoded
+  // - param is always decoded
   await page.getByRole("link", { name: "/test/dynamic/✅" }).click();
   await page.getByText('params: {"id":"✅"}').click();
   await page.waitForURL("/test/dynamic/✅");
@@ -840,6 +1180,121 @@ test("dynamic routes", async ({ page }) => {
   ).toHaveAttribute("aria-current", "page");
 });
 
+test("remount on dynamic segment change", async ({ page }) => {
+  await page.goto("/test/dynamic/abc");
+  await waitForHydration(page);
+  await page.getByPlaceholder("dynamic-test").fill("hello");
+
+  // no remount on same segment
+  await page.getByRole("link", { name: "• /test/dynamic/abc/def" }).click();
+  await page.waitForURL("/test/dynamic/abc/def");
+  await page.getByText("pathname: /test/dynamic/abc/def").click();
+  await expect(page.getByPlaceholder("dynamic-test")).toHaveValue("hello");
+
+  // remount on new segment
+  await page.getByRole("link", { name: "• /test/dynamic/✅" }).click();
+  await page.waitForURL("/test/dynamic/✅");
+  await expect(page.getByPlaceholder("dynamic-test")).toHaveValue("");
+});
+
+test("catch-all routes @js", async ({ page }) => {
+  checkNoError(page);
+  await page.goto("/test/dynamic/catchall");
+  await waitForHydration(page);
+  await testCatchallRoute(page, { js: true });
+});
+
+testNoJs("catch-all routes @nojs", async ({ page }) => {
+  checkNoError(page);
+  await page.goto("/test/dynamic/catchall");
+  await testCatchallRoute(page, { js: false });
+});
+
+async function testCatchallRoute(page: Page, _options: { js: boolean }) {
+  await page
+    .getByRole("link", { name: "• /test/dynamic/catchall/static" })
+    .click();
+  await page.getByText("params: {}").click();
+  await page.getByText("file: /test/dynamic/catchall/").click();
+
+  await page
+    .getByRole("link", { name: "• /test/dynamic/catchall/x", exact: true })
+    .click();
+  await page.getByText('params: {"any":"x"}').click();
+  await page.getByText("file: /test/dynamic/catchall").click();
+  await page.getByLabel("test state").check();
+
+  await page
+    .getByRole("link", { name: "• /test/dynamic/catchall/x/y", exact: true })
+    .click();
+  await page.getByText("file: /test/dynamic/catchall").click();
+  await page.getByText('params: {"any":"x/y"}').click();
+  // state is not preserved
+  await expect(page.getByLabel("test state")).not.toBeChecked();
+
+  await page
+    .getByRole("link", { name: "• /test/dynamic/catchall/x/y/z" })
+    .click();
+  await page.getByText("file: /test/dynamic/catchall").click();
+  await page.getByText('params: {"any":"x/y/z"}').click();
+  await page.getByLabel("test state").check();
+
+  await page
+    .getByRole("link", { name: "• /test/dynamic/catchall/x/y/w" })
+    .click();
+  await page.getByText("file: /test/dynamic/catchall").click();
+  await page.getByText('params: {"any":"x/y/w"}').click();
+  // state is not preserved
+  await expect(page.getByLabel("test state")).not.toBeChecked();
+}
+
+test("optional catch-all", async ({ page }) => {
+  checkNoError(page);
+  await page.goto("/test/catchall-opt");
+  await page.getByText('{"slug":""}').click();
+  await page
+    .getByRole("link", { name: "• /test/catchall-opt/x", exact: true })
+    .click();
+  await page.getByText('{"slug":"x"}').click();
+  await page.getByRole("link", { name: "• /test/catchall-opt/x/y" }).click();
+  await page.getByText('{"slug":"x/y"}').click();
+});
+
+test("useSelectedLayoutSegments", async ({ page }) => {
+  await page.goto("/test/dynamic/selected");
+  await page.getByText("/layout.tsx: []").click();
+  await page.getByText("/page.tsx: []").click();
+
+  await page
+    .getByRole("link", { name: "• /test/dynamic/selected/x", exact: true })
+    .click();
+  await page.getByText('/layout.tsx: ["x"]').click();
+  await page.getByText("/[p1]/layout.tsx: []").click();
+
+  await page
+    .getByRole("link", { name: "• /test/dynamic/selected/x/y" })
+    .click();
+  await page.getByText('/layout.tsx: ["x","y"]').click();
+  await page.getByText('/[p1]/layout.tsx: ["y"]').click();
+  await page.getByText("/[p1]/[p2]/layout.tsx: []").click();
+
+  await page
+    .getByRole("link", {
+      name: "• /test/dynamic/selected/x/static",
+      exact: true,
+    })
+    .click();
+  await page.getByText('/layout.tsx: ["x","static"]').click();
+  await page.getByText('/[p1]/layout.tsx: ["static"]').click();
+
+  await page
+    .getByRole("link", { name: "• /test/dynamic/selected/x/static/y" })
+    .click();
+  await page.getByText('/layout.tsx: ["x","static","y"]').click();
+  await page.getByText('/[p1]/layout.tsx: ["static","y"]').click();
+  await page.getByText('/[p1]/static/layout.tsx: ["y"]').click();
+});
+
 test("full client route", async ({ page }) => {
   checkNoError(page);
   await page.goto("/test/client/full");
@@ -847,16 +1302,275 @@ test("full client route", async ({ page }) => {
   await page.getByRole("heading", { name: '"use client" page' }).click();
 });
 
-async function setupCheckClientState(page: Page) {
-  // setup client state
-  await page.getByPlaceholder("test-input").fill("hello");
+test("preload ssr @build", async ({ request }) => {
+  const file = getClientManifest()["virtual:test-use-client"].file;
 
-  return async () => {
-    // verify client state is preserved
-    await expect(page.getByPlaceholder("test-input")).toHaveValue("hello");
-  };
+  const res = await request.get("/test/deps");
+  const resText = await res.text();
+  expect(resText).toContain(`<link rel="modulepreload" href="/${file}"/>`);
+});
+
+test("preload client @build", async ({ page }) => {
+  const file = getClientManifest()["virtual:test-use-client"].file;
+
+  await page.goto("/test");
+  await waitForHydration(page);
+  await expect(page.locator(`link[href="/${file}"]`)).not.toBeAttached();
+
+  // mouse over to /test/deps
+  await page
+    .getByRole("link", { name: "/test/deps" })
+    .dispatchEvent("mouseover");
+  await expect(page.locator(`link[href="/${file}"]`)).toBeAttached();
+});
+
+test("trailing slash", async ({ request }) => {
+  const res = await request.get("/test/?hello", { maxRedirects: 0 });
+  expect([res.status(), res.headers()["location"]]).toEqual([
+    308,
+    "/test?hello",
+  ]);
+});
+
+test("React.cache @js", async ({ page }) => {
+  await testReactCache(page, { js: true });
+});
+
+testNoJs("React.cache @nojs", async ({ page }) => {
+  await testReactCache(page, { js: false });
+});
+
+async function testReactCache(page: Page, options: { js: boolean }) {
+  await page.goto("/test/cache");
+  await page.getByText("Page: state = 1").click();
+  await page.getByText("Inner1: state = 1").click();
+  if (options.js) await page.getByText("Inner2: state = 1").click();
+
+  await page.reload();
+  await page.getByText("Page: state = 2").click();
+  await page.getByText("Inner1: state = 2").click();
+  if (options.js) await page.getByText("Inner2: state = 2").click();
+
+  if (options.js) await waitForHydration(page);
+  await page.getByRole("button", { name: "Reset" }).click();
+  await page.getByText("Page: state = 0").click();
+  await page.getByText("Inner1: state = 0").click();
+  if (options.js) await page.getByText("Inner2: state = 0").click();
 }
 
-async function waitForHydration(page: Page) {
-  await expect(page.getByText("[hydrated: 1]")).toBeVisible();
+test("meta @js", async ({ page }) => {
+  await page.goto("/test");
+  await waitForHydration(page);
+  await testMetadata(page);
+});
+
+testNoJs("meta @nojs", async ({ page }) => {
+  await page.goto("/test");
+  await testMetadata(page);
+});
+
+async function testMetadata(page: Page) {
+  await expect(page).toHaveTitle("rsc-experiment");
+
+  await page.getByRole("link", { name: "/test/other" }).click();
+  await expect(page).toHaveTitle("rsc-experiment");
+
+  await page.getByRole("link", { name: "/test/metadata" }).click();
+  await expect(page).toHaveTitle("test-metadata");
 }
+
+test("loading @js", async ({ page }) => {
+  await page.goto("/test/loading");
+  await waitForHydration(page);
+  await page.getByRole("link", { name: "• /test/loading/1" }).click();
+  await expect(page.getByTestId("/test/loading")).toBeVisible();
+  await page.getByText('params {"id":"1"}').click();
+  await page.getByRole("link", { name: "• /test/loading/2" }).click();
+  await expect(page.getByTestId("/test/loading")).toBeVisible();
+  await page.getByText('params {"id":"2"}').click();
+
+  // ssr
+  await page.goto("/test/loading/1", { waitUntil: "commit" });
+  await expect(page.getByTestId("/test/loading")).toBeVisible();
+  await page.getByText('params {"id":"1"}').click();
+});
+
+test("template @js", async ({ page }) => {
+  await page.goto("/test/template");
+  await page.getByText("template.tsx [mount: 1]").click();
+  await waitForHydration(page);
+
+  await page
+    .getByRole("link", { name: "• /test/template/x", exact: true })
+    .click();
+  await page.getByText("template.tsx [mount: 2]").click();
+  await page.getByText("[p1]/template.tsx [mount: 1]").click();
+
+  await page.getByRole("link", { name: "• /test/template/x/a" }).click();
+  await page.getByText("template.tsx [mount: 2]", { exact: true }).click();
+  await page.getByText("[p1]/template.tsx [mount: 2]").click();
+
+  await page.getByRole("link", { name: "• /test/template/x/b" }).click();
+  await page.getByText("template.tsx [mount: 2]", { exact: true }).click();
+  await page.getByText("[p1]/template.tsx [mount: 3]").click();
+
+  await page
+    .getByRole("link", { name: "• /test/template/y", exact: true })
+    .click();
+  await page.getByText("template.tsx [mount: 3]").click();
+  await page.getByText("[p1]/template.tsx [mount: 4]").click();
+});
+
+test("server assses", async ({ page }) => {
+  checkNoError(page);
+  await page.goto("/test/assets");
+  await expect(page.getByTestId("js-import")).toHaveScreenshot();
+  await expect(page.getByTestId("css-url")).toHaveScreenshot();
+});
+
+test("api routes", async ({ request }) => {
+  {
+    const res = await request.get("/test/api/static");
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual({
+      route: "/test/api/static",
+      method: "GET",
+      pathname: "/test/api/static",
+      context: { params: {} },
+    });
+  }
+
+  {
+    const res = await request.post("/test/api/static", {
+      data: "hey",
+    });
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual({
+      route: "/test/api/static",
+      method: "POST",
+      pathname: "/test/api/static",
+      text: "hey",
+      context: { params: {} },
+    });
+  }
+
+  {
+    const res = await request.get("/test/api/dynamic/hello");
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual({
+      route: "/test/api/dynamic/[id]",
+      method: "GET",
+      pathname: "/test/api/dynamic/hello",
+      context: { params: { id: "hello" } },
+    });
+  }
+
+  {
+    const res = await request.post("/test/api/dynamic/hello", {
+      data: "hey",
+    });
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual({
+      route: "/test/api/dynamic/[id]",
+      method: "POST",
+      pathname: "/test/api/dynamic/hello",
+      text: "hey",
+      context: { params: { id: "hello" } },
+    });
+  }
+});
+
+test("cookies api route", async ({ request }) => {
+  {
+    const res = await request.get("/test/api/context");
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual({
+      route: "/test/api/context",
+      method: "GET",
+    });
+  }
+
+  {
+    const res = await request.post("/test/api/context", {
+      form: {
+        value: "hey",
+      },
+    });
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual({
+      cookie: "hey",
+      route: "/test/api/context",
+      method: "POST",
+    });
+  }
+
+  {
+    const res = await request.get("/test/api/context");
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual({
+      cookie: "hey",
+      route: "/test/api/context",
+      method: "GET",
+    });
+  }
+});
+
+test("route groups @js", async ({ page }) => {
+  await page.goto("/test/group");
+  await waitForHydration(page);
+  await testRouteGroups(page);
+});
+
+testNoJs("route groups @nojs", async ({ page }) => {
+  await page.goto("/test/group");
+  await testRouteGroups(page);
+});
+
+async function testRouteGroups(page: Page) {
+  await page.getByRole("heading", { name: "(main)/layout.tsx" }).click();
+  await page.getByText("(main)/page.tsx").click();
+
+  await page.getByRole("link", { name: "• /test/group/electronics" }).click();
+  await page.getByRole("heading", { name: "(shop)/layout.tsx" }).click();
+  await page
+    .getByRole("heading", { name: "(shop)/[categorySlug]/layout.tsx" })
+    .click();
+  await page
+    .getByRole("heading", { name: "(shop)/[categorySlug]/page.tsx" })
+    .click();
+  await page.getByText('{"categorySlug":"electronics"}').click();
+
+  await page
+    .getByRole("link", { name: "• /test/group/electronics/phones" })
+    .click();
+  await page
+    .getByRole("heading", { name: "(shop)/[categorySlug]/layout.tsx" })
+    .click();
+  await page
+    .getByRole("heading", {
+      name: "(shop)/[categorySlug]/[subCategorySlug]/page.tsx",
+    })
+    .click();
+  await page
+    .getByText('{"categorySlug":"electronics","subCategorySlug":"phones"}')
+    .click();
+
+  await page.getByRole("link", { name: "• /test/group/checkout" }).click();
+  await page.getByRole("heading", { name: "(checkout)/layout.tsx" }).click();
+  await page.getByText("(checkout)/checkout/page.tsx").click();
+  await page.getByRole("link", { name: "Back" }).click();
+
+  await page.getByRole("link", { name: "• /test/group/blog" }).click();
+  await page.getByRole("heading", { name: "(marketing)/layout.tsx" }).click();
+  await page.getByText("(marketing)/blog/page.tsx").click();
+}
+
+test("head inline script", async ({ page }) => {
+  checkNoError(page);
+  await page.goto("/test");
+  await waitForHydration(page);
+  const result = await page.evaluate(
+    () => (self as any).__testHeadInlineScript,
+  );
+  expect(result).toBe(true);
+});

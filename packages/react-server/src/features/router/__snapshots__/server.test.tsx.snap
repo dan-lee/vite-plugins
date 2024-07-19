@@ -1,0 +1,433 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`generateRouteModuleTree > basic 1`] = `
+{
+  "children": {
+    "": {
+      "children": {
+        "x": {
+          "children": {
+            "y": {
+              "value": {
+                "layout": {
+                  "default": "/X/Y/LAYOUT.TSX",
+                },
+                "page": {
+                  "default": "/X/Y/PAGE.TSX",
+                },
+              },
+            },
+          },
+          "value": {
+            "error": {
+              "default": "/X/ERROR.TSX",
+            },
+            "page": {
+              "default": "/X/PAGE.TSX",
+            },
+          },
+        },
+      },
+      "value": {
+        "layout": {
+          "default": "/LAYOUT.TSX",
+        },
+        "not-found": {
+          "default": [Function],
+        },
+        "page": {
+          "default": "/PAGE.TSX",
+        },
+      },
+    },
+  },
+}
+`;
+
+exports[`generateRouteModuleTree > basic 2`] = `
+{
+  "__pathname": "/x",
+  "layoutContentMap": {
+    "/:layout": "/x:layout",
+    "/x:layout": "/x:page",
+    "__root": "/:layout",
+  },
+  "metadata": <React.Fragment />,
+  "nodeMap": {
+    "/:layout": <LayoutMatchProvider
+      value={
+        {
+          "segments": [
+            {
+              "type": "static",
+              "value": "",
+            },
+          ],
+        }
+      }
+    >
+      </LAYOUT.TSX
+        params={{}}
+        request={
+          {
+            "headers": {},
+            "url": "https://test.local/x",
+          }
+        }
+        searchParams={{}}
+        url={
+          {
+            "hash": "",
+            "host": "test.local",
+            "hostname": "test.local",
+            "href": "https://test.local/x",
+            "origin": "https://test.local",
+            "password": "",
+            "pathname": "/x",
+            "port": "",
+            "protocol": "https:",
+            "search": "",
+            "username": "",
+          }
+        }
+      >
+        <NotFoundBoundary
+          fallback={<DefaultNotFoundPage />}
+        >
+          <RedirectBoundary>
+            <LayoutContent
+              name="/:layout"
+            />
+          </RedirectBoundary>
+        </NotFoundBoundary>
+      <//LAYOUT.TSX>
+    </LayoutMatchProvider>,
+    "/x:layout": <LayoutMatchProvider
+      value={
+        {
+          "segments": [
+            {
+              "type": "static",
+              "value": "",
+            },
+            {
+              "type": "static",
+              "value": "x",
+            },
+          ],
+        }
+      }
+    >
+      <React.Fragment>
+        <ErrorBoundary
+          errorComponent="/X/ERROR.TSX"
+        >
+          <RedirectBoundary>
+            <LayoutContent
+              name="/x:layout"
+            />
+          </RedirectBoundary>
+        </ErrorBoundary>
+      </React.Fragment>
+    </LayoutMatchProvider>,
+    "/x:page": </X/PAGE.TSX
+      params={{}}
+      request={
+        {
+          "headers": {},
+          "url": "https://test.local/x",
+        }
+      }
+      searchParams={{}}
+      url={
+        {
+          "hash": "",
+          "host": "test.local",
+          "hostname": "test.local",
+          "href": "https://test.local/x",
+          "origin": "https://test.local",
+          "password": "",
+          "pathname": "/x",
+          "port": "",
+          "protocol": "https:",
+          "search": "",
+          "username": "",
+        }
+      }
+    />,
+  },
+  "notFound": false,
+  "segments": [
+    {
+      "type": "static",
+      "value": "",
+    },
+    {
+      "type": "static",
+      "value": "x",
+    },
+    {
+      "type": "page",
+    },
+  ],
+}
+`;
+
+exports[`generateRouteModuleTree > basic 3`] = `
+{
+  "__pathname": "/x/y",
+  "layoutContentMap": {
+    "/:layout": "/x:layout",
+    "/x/y:layout": "/x/y:page",
+    "/x:layout": "/x/y:layout",
+    "__root": "/:layout",
+  },
+  "metadata": <React.Fragment />,
+  "nodeMap": {
+    "/:layout": <LayoutMatchProvider
+      value={
+        {
+          "segments": [
+            {
+              "type": "static",
+              "value": "",
+            },
+          ],
+        }
+      }
+    >
+      </LAYOUT.TSX
+        params={{}}
+        request={
+          {
+            "headers": {},
+            "url": "https://test.local/x/y",
+          }
+        }
+        searchParams={{}}
+        url={
+          {
+            "hash": "",
+            "host": "test.local",
+            "hostname": "test.local",
+            "href": "https://test.local/x/y",
+            "origin": "https://test.local",
+            "password": "",
+            "pathname": "/x/y",
+            "port": "",
+            "protocol": "https:",
+            "search": "",
+            "username": "",
+          }
+        }
+      >
+        <NotFoundBoundary
+          fallback={<DefaultNotFoundPage />}
+        >
+          <RedirectBoundary>
+            <LayoutContent
+              name="/:layout"
+            />
+          </RedirectBoundary>
+        </NotFoundBoundary>
+      <//LAYOUT.TSX>
+    </LayoutMatchProvider>,
+    "/x/y:layout": <LayoutMatchProvider
+      value={
+        {
+          "segments": [
+            {
+              "type": "static",
+              "value": "",
+            },
+            {
+              "type": "static",
+              "value": "x",
+            },
+            {
+              "type": "static",
+              "value": "y",
+            },
+          ],
+        }
+      }
+    >
+      </X/Y/LAYOUT.TSX
+        params={{}}
+        request={
+          {
+            "headers": {},
+            "url": "https://test.local/x/y",
+          }
+        }
+        searchParams={{}}
+        url={
+          {
+            "hash": "",
+            "host": "test.local",
+            "hostname": "test.local",
+            "href": "https://test.local/x/y",
+            "origin": "https://test.local",
+            "password": "",
+            "pathname": "/x/y",
+            "port": "",
+            "protocol": "https:",
+            "search": "",
+            "username": "",
+          }
+        }
+      >
+        <RedirectBoundary>
+          <LayoutContent
+            name="/x/y:layout"
+          />
+        </RedirectBoundary>
+      <//X/Y/LAYOUT.TSX>
+    </LayoutMatchProvider>,
+    "/x/y:page": </X/Y/PAGE.TSX
+      params={{}}
+      request={
+        {
+          "headers": {},
+          "url": "https://test.local/x/y",
+        }
+      }
+      searchParams={{}}
+      url={
+        {
+          "hash": "",
+          "host": "test.local",
+          "hostname": "test.local",
+          "href": "https://test.local/x/y",
+          "origin": "https://test.local",
+          "password": "",
+          "pathname": "/x/y",
+          "port": "",
+          "protocol": "https:",
+          "search": "",
+          "username": "",
+        }
+      }
+    />,
+    "/x:layout": <LayoutMatchProvider
+      value={
+        {
+          "segments": [
+            {
+              "type": "static",
+              "value": "",
+            },
+            {
+              "type": "static",
+              "value": "x",
+            },
+          ],
+        }
+      }
+    >
+      <React.Fragment>
+        <ErrorBoundary
+          errorComponent="/X/ERROR.TSX"
+        >
+          <RedirectBoundary>
+            <LayoutContent
+              name="/x:layout"
+            />
+          </RedirectBoundary>
+        </ErrorBoundary>
+      </React.Fragment>
+    </LayoutMatchProvider>,
+  },
+  "notFound": false,
+  "segments": [
+    {
+      "type": "static",
+      "value": "",
+    },
+    {
+      "type": "static",
+      "value": "x",
+    },
+    {
+      "type": "static",
+      "value": "y",
+    },
+    {
+      "type": "page",
+    },
+  ],
+}
+`;
+
+exports[`generateRouteModuleTree > basic 4`] = `
+{
+  "__pathname": "/z",
+  "layoutContentMap": {
+    "/:layout": "/z:not-found",
+    "__root": "/:layout",
+  },
+  "metadata": <React.Fragment />,
+  "nodeMap": {
+    "/:layout": <LayoutMatchProvider
+      value={
+        {
+          "segments": [
+            {
+              "type": "static",
+              "value": "",
+            },
+          ],
+        }
+      }
+    >
+      </LAYOUT.TSX
+        params={{}}
+        request={
+          {
+            "headers": {},
+            "url": "https://test.local/z",
+          }
+        }
+        searchParams={{}}
+        url={
+          {
+            "hash": "",
+            "host": "test.local",
+            "hostname": "test.local",
+            "href": "https://test.local/z",
+            "origin": "https://test.local",
+            "password": "",
+            "pathname": "/z",
+            "port": "",
+            "protocol": "https:",
+            "search": "",
+            "username": "",
+          }
+        }
+      >
+        <NotFoundBoundary
+          fallback={<DefaultNotFoundPage />}
+        >
+          <RedirectBoundary>
+            <LayoutContent
+              name="/:layout"
+            />
+          </RedirectBoundary>
+        </NotFoundBoundary>
+      <//LAYOUT.TSX>
+    </LayoutMatchProvider>,
+    "/z:not-found": <DefaultNotFoundPage />,
+  },
+  "notFound": true,
+  "segments": [
+    {
+      "type": "static",
+      "value": "",
+    },
+    {
+      "type": "not-found",
+      "value": "z",
+    },
+  ],
+}
+`;

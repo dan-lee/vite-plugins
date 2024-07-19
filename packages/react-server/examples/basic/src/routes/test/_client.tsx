@@ -4,16 +4,12 @@ import { tinyassert } from "@hiogawa/utils";
 import React from "react";
 
 export function Hydrated() {
-  const [hydrated, setHydrated] = React.useState(false);
-  React.useEffect(() => {
-    setHydrated(true);
-  }, []);
-  return <div>[hydrated: {Number(hydrated)}]</div>;
+  return <div>[hydrated: {Number(useHydrated())}]</div>;
 }
 
 // test client re-rendering
 // https://github.com/pmndrs/jotai/blob/419ab5cda3503e70463dc340076e21e438db89b6/tests/react/basic.test.tsx#L27-L33
-export function EffectCount() {
+export function EffectCount({ label = "effect" }: { label?: string }) {
   const elRef = React.useRef<HTMLElement>(null);
   const countRef = React.useRef(0);
 
@@ -25,7 +21,15 @@ export function EffectCount() {
 
   return (
     <div>
-      [effect: <span ref={elRef}>0</span>]
+      [{label}: <span ref={elRef}>0</span>]
     </div>
+  );
+}
+
+export function useHydrated() {
+  return React.useSyncExternalStore(
+    React.useCallback(() => () => {}, []),
+    () => true,
+    () => false,
   );
 }

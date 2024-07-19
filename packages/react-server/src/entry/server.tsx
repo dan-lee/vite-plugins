@@ -1,235 +1,230 @@
-import { createDebug, splitFirst, tinyassert } from "@hiogawa/utils";
-import { createMemoryHistory } from "@tanstack/history";
-import reactDomServer from "react-dom/server.edge";
-import type { ModuleNode, ViteDevServer } from "vite";
-import { LayoutRoot, LayoutStateContext } from "../features/router/client";
-import type { ServerRouterData } from "../features/router/utils";
-import {
-  createModuleMap,
-  initializeWebpackSsr,
-  ssrImportPromiseCache,
-} from "../features/use-client/server";
-import { Router, RouterContext } from "../lib/client/router";
+import * as serverRoutes from "virtual:server-routes";
+import { createDebug, objectPick, objectPickBy } from "@hiogawa/utils";
+import type { RenderToReadableStreamOptions } from "react-dom/server";
+import ReactServer from "react-server-dom-webpack/server.edge";
+import { createBundlerConfig } from "../features/client-component/server";
 import {
   DEFAULT_ERROR_CONTEXT,
+  ReactServerDigestError,
+  createError,
   getErrorContext,
-  getStatusText,
-  isRedirectError,
-} from "../lib/error";
-import { $__global } from "../lib/global";
+  isRedirectStatus,
+} from "../features/error/shared";
+import { handleMiddleware } from "../features/next/middleware";
+import { RequestContext } from "../features/request-context/server";
+import { handleApiRoutes } from "../features/router/api-route";
 import {
-  ENTRY_REACT_SERVER_WRAPPER,
-  type SsrAssetsType,
-  invalidateModule,
-} from "../plugin/utils";
-import { jsonStringifyTransform } from "../utils/stream";
-import { injectStreamScript } from "../utils/stream-script";
-import type { ReactServerHandlerStreamResult } from "./react-server";
+  generateRouteModuleTree,
+  getCachedRoutes,
+  renderRouteMap,
+} from "../features/router/server";
+import { type FlightData, handleTrailingSlash } from "../features/router/utils";
+import {
+  createActionRedirectResponse,
+  createFlightRedirectResponse,
+} from "../features/server-action/redirect";
+import {
+  type ActionResult,
+  createActionBundlerConfig,
+  importServerAction,
+  initializeReactServer,
+  serverReferenceImportPromiseCache,
+} from "../features/server-action/server";
+import { unwrapStreamRequest } from "../features/server-component/utils";
 
-const debug = createDebug("react-server:ssr");
+const debug = createDebug("react-server:rsc");
 
-export async function handler(request: Request): Promise<Response> {
-  // dev only api endpoint to test internal
-  if (
-    import.meta.env.DEV &&
-    new URL(request.url).pathname === "/__react_server_dev"
-  ) {
-    return devInspectHandler(request);
-  }
+export const router = generateRouteModuleTree(serverRoutes.default);
 
-  const reactServer = await importReactServer();
+export type ReactServerHandler = (
+  ctx: ReactServerHandlerContext,
+) => Promise<ReactServerHandlerResult>;
 
-  // server action and render rsc stream
-  const result = await reactServer.handler({ request });
-  if (result instanceof Response) {
-    return result;
-  }
-
-  // render rsc stream into html (or redirect)
-  return renderHtml(request, result);
+// users can extend interface
+export interface ReactServerHandlerContext {
+  request: Request;
 }
 
-export async function importReactServer(): Promise<
-  typeof import("./react-server")
-> {
-  if (import.meta.env.DEV) {
-    return $__global.dev.reactServer.ssrLoadModule(
-      ENTRY_REACT_SERVER_WRAPPER,
-    ) as any;
-  } else {
-    return import("/dist/rsc/index.js" as string);
-  }
+export interface ReactServerHandlerStreamResult {
+  stream: ReadableStream<Uint8Array>;
+  status: number;
+  requestContext: RequestContext;
+  actionResult?: ActionResult;
 }
 
-export async function renderHtml(
-  request: Request,
-  result: ReactServerHandlerStreamResult,
-) {
-  initializeWebpackSsr();
+export type ReactServerHandlerResult =
+  | Response
+  | ReactServerHandlerStreamResult;
 
-  const { default: reactServerDomClient } = await import(
-    "react-server-dom-webpack/client.edge"
-  );
-
-  //
-  // ssr root
-  //
+export const handler: ReactServerHandler = async (ctx) => {
+  initializeReactServer();
 
   if (import.meta.env.DEV) {
-    ssrImportPromiseCache.clear();
+    serverReferenceImportPromiseCache.clear();
   }
 
-  const [stream1, stream2] = result.stream.tee();
+  const handled = handleTrailingSlash(new URL(ctx.request.url));
+  if (handled) return handled;
 
-  const layoutPromise =
-    reactServerDomClient.createFromReadableStream<ServerRouterData>(stream1, {
-      ssrManifest: {
-        moduleMap: createModuleMap(),
-        moduleLoading: null,
-      },
-    });
+  const requestContext = new RequestContext(ctx.request.headers);
 
-  const url = new URL(request.url);
-  const history = createMemoryHistory({
-    initialEntries: [url.href.slice(url.origin.length)],
-  });
-  const router = new Router(history);
+  // normalize stream request and extract metadata
+  const { request, isStream, streamParam } = unwrapStreamRequest(ctx.request);
 
-  const reactRootEl = (
-    <RouterContext.Provider value={router}>
-      <LayoutStateContext.Provider value={{ data: layoutPromise }}>
-        <LayoutRoot />
-      </LayoutStateContext.Provider>
-    </RouterContext.Provider>
-  );
-
-  //
-  // render
-  //
-
-  if (import.meta.env.DEV) {
-    // ensure latest css
-    invalidateModule($__global.dev.server, "\0virtual:react-server-css.js");
-    invalidateModule($__global.dev.server, "\0virtual:dev-ssr-css.css?direct");
-  }
-  const assets: SsrAssetsType = (await import("virtual:ssr-assets" as string))
-    .default;
-
-  // inject DEBUG variable
-  if (globalThis?.process?.env?.["DEBUG"]) {
-    assets.head += `<script>globalThis.__DEBUG = "${process.env["DEBUG"]}"</script>\n`;
-  }
-
-  // two pass SSR to re-render on error
-  let ssrStream: ReadableStream<Uint8Array>;
-  let status = 200;
-  try {
-    ssrStream = await reactDomServer.renderToReadableStream(reactRootEl, {
-      // @ts-expect-error no type yet
-      formState: result.actionResult?.data,
-      bootstrapModules: url.search.includes("__nojs")
-        ? []
-        : assets.bootstrapModules,
-      onError(error, errorInfo) {
-        debug("renderToReadableStream", { error, errorInfo });
-        if (!getErrorContext(error)) {
-          console.error("[react-dom:renderToReadableStream]", error);
-        }
-      },
-    });
-  } catch (e) {
-    const ctx = getErrorContext(e) ?? DEFAULT_ERROR_CONTEXT;
-    if (isRedirectError(ctx)) {
-      return new Response(null, { status: ctx.status, headers: ctx.headers });
-    }
-    status = ctx.status;
-    // render empty as error fallback and
-    // let browser render full CSR instead of hydration
-    // which will replay client error boudnary from RSC error
-    // TODO: proper two-pass SSR with error route tracking?
-    // TODO: meta tag system
-    const errorRoot = (
-      <html data-no-hydrate>
-        <head>
-          <meta charSet="utf-8" />
-        </head>
-        <body>
-          <noscript>
-            {status} {getStatusText(status)}
-          </noscript>
-        </body>
-      </html>
+  if (serverRoutes.middleware) {
+    const response = await handleMiddleware(
+      serverRoutes.middleware,
+      request,
+      requestContext,
     );
-    ssrStream = await reactDomServer.renderToReadableStream(errorRoot, {
-      bootstrapModules: assets.bootstrapModules,
-    });
-  }
-
-  const htmlStream = ssrStream
-    .pipeThrough(new TextDecoderStream())
-    .pipeThrough(injectToHead(assets.head))
-    .pipeThrough(
-      injectStreamScript(
-        stream2
-          .pipeThrough(new TextDecoderStream())
-          .pipeThrough(jsonStringifyTransform()),
-      ),
-    )
-    .pipeThrough(new TextEncoderStream());
-
-  return new Response(htmlStream, {
-    status,
-    headers: {
-      ...result.actionResult?.responseHeaders,
-      "content-type": "text/html",
-    },
-  });
-}
-
-function injectToHead(data: string) {
-  const marker = "<head>";
-  let done = false;
-  return new TransformStream<string, string>({
-    transform(chunk, controller) {
-      if (!done && chunk.includes(marker)) {
-        const [pre, post] = splitFirst(chunk, marker);
-        controller.enqueue(pre + marker + data + post);
-        done = true;
-        return;
+    if (response) {
+      if (isStream && isRedirectStatus(response.status)) {
+        return createFlightRedirectResponse(response, requestContext);
       }
-      controller.enqueue(chunk);
-    },
-  });
-}
+      return response;
+    }
+  }
 
-async function devInspectHandler(request: Request) {
-  tinyassert(request.method === "POST");
-  const data = await request.json();
-  if (data.type === "module") {
-    let mod: ModuleNode | undefined;
-    if (data.environment === "ssr") {
-      mod = await getModuleNode($__global.dev.server, data.url, true);
-    }
-    if (data.environment === "react-server") {
-      mod = await getModuleNode($__global.dev.reactServer, data.url, true);
-    }
-    const result = mod && {
-      id: mod.id,
-      lastInvalidationTimestamp: mod.lastInvalidationTimestamp,
-      importers: [...(mod.importers ?? [])].map((m) => m.id),
-      ssrImportedModules: [...(mod.ssrImportedModules ?? [])].map((m) => m.id),
-      clientImportedModules: [...(mod.clientImportedModules ?? [])].map(
-        (m) => m.id,
-      ),
-    };
-    return new Response(JSON.stringify(result || false, null, 2), {
-      headers: { "content-type": "application/json" },
+  const handledApi = await handleApiRoutes(
+    router.tree,
+    ctx.request,
+    requestContext,
+  );
+  if (handledApi) return handledApi;
+
+  // action
+  let actionResult: ActionResult | undefined;
+  if (ctx.request.method === "POST") {
+    actionResult = await actionHandler({
+      request,
+      streamActionId: streamParam?.actionId,
+      requestContext,
+    });
+    // respond action redirect error directly
+    const redirectResponse = createActionRedirectResponse({
+      isStream,
+      actionResult,
+      requestContext,
+    });
+    if (redirectResponse) return redirectResponse;
+  }
+
+  // render flight stream
+  const result = await renderRouteMap(router.tree, request);
+  if (streamParam?.lastPathname) {
+    // skip rendering shared layout which are not revalidated
+    const cachedRoutes = getCachedRoutes(
+      router.tree,
+      streamParam.lastPathname,
+      [streamParam?.revalidate, requestContext.revalidate],
+    );
+    result.nodeMap = objectPickBy(
+      result.nodeMap,
+      (_v, k) => !cachedRoutes.includes(k),
+    );
+  }
+  const flightData: FlightData = {
+    nodeMap: result.nodeMap,
+    layoutContentMap: result.layoutContentMap,
+    metadata: result.metadata,
+    segments: result.segments,
+    url: request.url,
+    action: actionResult
+      ? objectPick(actionResult, ["data", "error"])
+      : undefined,
+  };
+  const stream = requestContext.run(() =>
+    ReactServer.renderToReadableStream<FlightData>(
+      flightData,
+      createBundlerConfig(),
+      {
+        onError: reactServerOnError,
+      },
+    ),
+  );
+
+  if (isStream) {
+    return new Response(stream, {
+      headers: {
+        ...requestContext.getResponseHeaders(),
+        "content-type": "text/x-component; charset=utf-8",
+      },
     });
   }
-  tinyassert(false);
-}
 
-async function getModuleNode(server: ViteDevServer, url: string, ssr: boolean) {
-  const resolved = await server.moduleGraph.resolveUrl(url, ssr);
-  return server.moduleGraph.getModuleById(resolved[1]);
+  return {
+    stream,
+    actionResult,
+    requestContext,
+    status: result.notFound ? 404 : 200,
+  };
+};
+
+const reactServerOnError: RenderToReadableStreamOptions["onError"] = (
+  error,
+  errorInfo,
+) => {
+  debug("[reactServerDomServer.renderToReadableStream]", {
+    error,
+    errorInfo,
+  });
+  if (!(error instanceof ReactServerDigestError)) {
+    console.error("[react-server:renderToReadableStream]", error);
+  }
+  const serverError =
+    error instanceof ReactServerDigestError
+      ? error
+      : createError({ status: 500 });
+  return serverError.digest;
+};
+
+//
+// server action
+//
+
+// https://github.com/facebook/react/blob/da69b6af9697b8042834644b14d0e715d4ace18a/fixtures/flight/server/region.js#L105
+async function actionHandler({
+  request,
+  streamActionId,
+  requestContext,
+}: {
+  request: Request;
+  streamActionId?: string;
+  requestContext: RequestContext;
+}) {
+  let boundAction: Function;
+  if (streamActionId) {
+    const contentType = request.headers.get("content-type");
+    const body = contentType?.startsWith("multipart/form-data")
+      ? await request.formData()
+      : await request.text();
+    const args = await ReactServer.decodeReply(
+      body,
+      createActionBundlerConfig(),
+    );
+    const action = await importServerAction(streamActionId);
+    boundAction = () => action.apply(null, args);
+  } else {
+    const formData = await request.formData();
+    const decodedAction = await ReactServer.decodeAction(
+      formData,
+      createActionBundlerConfig(),
+    );
+    boundAction = async () => {
+      const result = await decodedAction();
+      const formState = await ReactServer.decodeFormState(result, formData);
+      return formState;
+    };
+  }
+
+  const result: ActionResult = {};
+  try {
+    result.data = await requestContext.run(() => boundAction());
+  } catch (e) {
+    result.error = getErrorContext(e) ?? DEFAULT_ERROR_CONTEXT;
+  }
+  if (result.error?.headers) {
+    requestContext.mergeResponseHeaders(new Headers(result.error?.headers));
+  }
+  return result;
 }

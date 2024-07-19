@@ -9,19 +9,17 @@ import {
   ActionDataTest,
   Chat,
   ClientActionBindTest,
-  Counter,
-  Counter2,
   FormStateTest,
   NonFormActionTest,
+  TestActionErrorTryCatch,
+  TestActionReturnComponent,
 } from "./_client";
 
 export default async function Page() {
   return (
     <div className="flex flex-col gap-4 p-2">
       <div className="flex flex-col gap-2">
-        <Counter value={getCounter()} />
-        <Counter2 action={changeCounter} />
-        <Counter3 />
+        <Counter />
       </div>
       <Chat messages={getMessages()} />
       <ActionDataTest />
@@ -33,13 +31,46 @@ export default async function Page() {
         <div data-testid="action-bind">{getActionBindResult()}</div>
       </div>
       <FormStateTest />
+      <div className="border-t" />
+      <TestActionReturnComponent />
+      <div className="border-t" />
+      <TestHigherOrder />
+      <div className="border-t" />
+      <TestActionErrorTryCatch
+        action={async () => {
+          "use server";
+          throw new Error("boom!");
+        }}
+      />
+      <div className="border-t" />
+      <TestActionErrorBoundary />
     </div>
   );
 }
 
-function Counter3() {
+function TestActionErrorBoundary() {
+  return (
+    <div className="flex flex-col gap-2 items-start">
+      <div className="flex items-center gap-2">
+        <form
+          action={async () => {
+            "use server";
+            throw new Error("boom!");
+          }}
+        >
+          <button className="antd-btn antd-btn-default px-2">
+            TestActionErrorBoundary
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function Counter() {
   return (
     <form action={changeCounter} className="flex flex-col items-start gap-2">
+      <div className="font-bold">Count: {getCounter()}</div>
       <div className="flex gap-2">
         <button
           className="antd-btn antd-btn-default px-2"
@@ -55,7 +86,6 @@ function Counter3() {
         >
           +1
         </button>
-        <div>(server form)</div>
       </div>
     </form>
   );
@@ -71,4 +101,34 @@ function ServerActionBindTest() {
       </button>
     </form>
   );
+}
+
+let testHigherOrderState: any;
+
+function TestHigherOrder() {
+  return (
+    <div className="flex items-center gap-2">
+      <form
+        action={wrapAction(async (formData: FormData) => {
+          "use server";
+          testHigherOrderState = testHigherOrderState
+            ? null
+            : formData.get("test");
+        })}
+      >
+        <input type="hidden" name="test" value="ok" />
+        <button className="antd-btn antd-btn-default px-2">Higher Order</button>
+      </form>
+      <div data-testid="higher-order-result">
+        {testHigherOrderState ?? "(none)"}
+      </div>
+    </div>
+  );
+}
+
+function wrapAction<F extends (...args: any[]) => any>(action: F): F {
+  return (async (...args: any[]) => {
+    "use server";
+    return action(...args);
+  }) as any;
 }

@@ -16,43 +16,64 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup
         with:
-          node-version: 20
-      - run: corepack enable
-      - run: pnpm i
+          build: false
+          playwright: false
       - run: pnpm lint-check
       - run: pnpm build
       - run: pnpm tsc
       - run: pnpm test
 
-  test-react-server:
+  test-react-server-basic:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: corepack enable
-      - run: pnpm i
-      - run: pnpm build
-      - run: npx playwright install chromium
+      - uses: ./.github/actions/setup
       - run: pnpm -C packages/react-server/examples/basic test-e2e
       - run: pnpm -C packages/react-server/examples/basic build
       - run: pnpm -C packages/react-server/examples/basic test-e2e-preview
+      - run: pnpm -C packages/react-server/examples/basic cf-build
+      - run: pnpm -C packages/react-server/examples/basic test-e2e-cf-preview
+
+  test-react-server-basic-swc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: USE_SWC=1 pnpm -C packages/react-server/examples/basic test-e2e
+      - run: USE_SWC=1 pnpm -C packages/react-server/examples/basic build
+      - run: pnpm -C packages/react-server/examples/basic test-e2e-preview
+
+  test-react-server-others:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
       - run: pnpm -C packages/react-server test-e2e
+      - run: pnpm -C packages/react-server/examples/next test-e2e
+      - run: pnpm -C packages/react-server/examples/next build
+      - run: pnpm -C packages/react-server/examples/next test-e2e-preview
+      - run: pnpm -C packages/react-server/examples/next cf-build
+      - run: pnpm -C packages/react-server/examples/next vc-build
+      - run: pnpm -C packages/react-server/examples/prerender test-e2e
+      - run: pnpm -C packages/react-server/examples/prerender build
+      - run: pnpm -C packages/react-server/examples/prerender test-e2e-preview
+      - run: pnpm -C packages/react-server/examples/prerender cf-build
+      - run: pnpm -C packages/react-server/examples/prerender vc-build
+
+  test-react-server-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm -C packages/react-server test-package
 
   test-vite-node-miniflare:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: corepack enable
-      - run: pnpm i
-      - run: pnpm build
-      - run: npx playwright install chromium
+      - uses: ./.github/actions/setup
       - run: pnpm -C packages/vite-node-miniflare/examples/basic test-e2e
       - run: pnpm -C packages/vite-node-miniflare/examples/react test-e2e
       - run: pnpm -C packages/vite-node-miniflare/examples/react-router test-e2e
@@ -62,13 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: corepack enable
-      - run: pnpm i
-      - run: pnpm build
-      - run: npx playwright install chromium
+      - uses: ./.github/actions/setup
       - run: pnpm -C packages/vite-glob-routes/examples/demo test-e2e
       - run: pnpm -C packages/vite-glob-routes/examples/demo build
       - run: pnpm -C packages/vite-glob-routes/examples/demo test-e2e-preview

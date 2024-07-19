@@ -12,22 +12,27 @@ import { type Plugin, defineConfig } from "vite";
 export default defineConfig({
   clearScreen: false,
   plugins: [
-    react(),
+    process.env["USE_SWC"]
+      ? (await import("@vitejs/plugin-react-swc".slice())).default()
+      : react(),
     unocss(),
-    !process.env["CI"] &&
+    !process.env["E2E"] &&
       vitePluginErrorOverlay({
         patchConsoleError: true,
       }),
     vitePluginReactServer({
+      entryBrowser: "/src/entry-browser",
+      entryServer: "/src/entry-server",
       plugins: [
         testVitePluginVirtual(),
         {
           name: "cusotm-react-server-config",
           config() {
             return {
-              ssr: {
-                optimizeDeps: {
-                  include: ["cookie"],
+              build: {
+                assetsInlineLimit(filePath) {
+                  // test non-inlined server asset
+                  return !filePath.includes("/test/assets/");
                 },
               },
             };
@@ -40,14 +45,28 @@ export default defineConfig({
       entry: process.env["SSR_ENTRY"] || "/src/adapters/node.ts",
       preview: path.resolve("./dist/server/index.js"),
     }),
+    {
+      // disable compressions as it breaks html streaming
+      // https://github.com/vitejs/vite/blob/9f5c59f07aefb1756a37bcb1c0aff24d54288950/packages/vite/src/node/preview.ts#L178
+      name: "no-compression",
+      configurePreviewServer(server) {
+        server.middlewares.use((req, _res, next) => {
+          delete req.headers["accept-encoding"];
+          next();
+        });
+      },
+    },
     testVitePluginVirtual(),
   ],
   ssr: {
-    // needs to inline react-wrap-balancer since its default export
-    // is not recognized by NodeJS. See:
-    //   node -e 'import("react-wrap-balancer").then(console.log)'
-    //   https://publint.dev/react-wrap-balancer@1.1.0
-    noExternal: ["react-wrap-balancer"],
+    noExternal: [
+      // cjs default export. try
+      //   node -e 'import("react-wrap-balancer").then(console.log)'
+      //   https://publint.dev/react-wrap-balancer@1.1.0
+      "react-wrap-balancer",
+      // css import
+      "react-tweet",
+    ],
   },
 });
 

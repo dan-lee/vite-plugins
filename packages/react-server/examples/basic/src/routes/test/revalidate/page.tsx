@@ -4,8 +4,7 @@ import { actionTestRevalidate } from "./_action";
 
 export default function Layout(_props: LayoutProps) {
   return (
-    <div className="flex flex-col gap-3 p-2">
-      <h3 className="font-bold">Revalidate Test</h3>
+    <div className="flex flex-col gap-3">
       <form action={actionTestRevalidate} className="flex flex-col gap-2">
         <button className="antd-btn antd-btn-default px-2 self-start">
           Action
@@ -15,7 +14,7 @@ export default function Layout(_props: LayoutProps) {
         <Link
           className="antd-btn antd-btn-default px-2 self-start"
           href="/test/revalidate"
-          revalidate
+          revalidate="/"
         >
           Navigation
         </Link>
@@ -23,7 +22,7 @@ export default function Layout(_props: LayoutProps) {
       <LinkForm
         action="/test/revalidate"
         className="flex items-center gap-2"
-        revalidate
+        revalidate="/"
       >
         <input className="antd-input px-2" name="q" placeholder="Search..." />
         <button className="antd-btn antd-btn-default px-2 self-start">
