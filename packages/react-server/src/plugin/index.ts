@@ -143,6 +143,9 @@ export function vitePluginReactServer(
     clearScreen: false,
     configFile: false,
     cacheDir: "./node_modules/.vite-rsc",
+    server: {
+      middlewareMode: true,
+    },
     optimizeDeps: {
       noDiscovery: true,
       include: [],
